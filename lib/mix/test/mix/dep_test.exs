@@ -330,6 +330,44 @@ defmodule Mix.DepTest do
     Mix.RemoteConverger.register(nil)
   end
 
+  defmodule DivergingRemoteConverger do
+    @behaviour Mix.RemoteConverger
+
+    def remote?(%Mix.Dep{app: :deps_repo, scm: Mix.SCM.Path}), do: true
+    def remote?(%Mix.Dep{app: :git_repo, scm: Mix.SCM.Path}), do: true
+    def remote?(%Mix.Dep{}), do: false
+    def deps(%Mix.Dep{app: :deps_repo}, _lock), do: [{:git_repo, path: "custom/git_repo"}]
+    def deps(%Mix.Dep{app: :git_repo}, _lock), do: []
+    def post_converge, do: :ok
+
+    def converge(_deps, lock) do
+      lock
+      |> Map.put(:deps_repo, :custom)
+      |> Map.put(:git_repo, :custom)
+    end
+  end
+
+  test "converger detects diverged deps from remote converger" do
+    deps = [
+      {:deps_on_git_repo, "0.2.0", git: MixTest.Case.fixture_path("deps_on_git_repo")},
+      {:deps_repo, "0.1.0", path: "custom/deps_repo"}
+    ]
+
+    with_deps(deps, fn ->
+      Mix.RemoteConverger.register(DivergingRemoteConverger)
+
+      in_fixture("deps_status", fn ->
+        assert_raise Mix.Error, fn ->
+          Mix.Tasks.Deps.Get.run([])
+        end
+
+        assert_received {:mix_shell, :error, ["Dependencies have diverged:"]}
+      end)
+    end)
+  after
+    Mix.RemoteConverger.register(nil)
+  end
+
   test "pass dependencies to remote converger in defined order" do
     deps = [
       {:ok, "0.1.0", path: "deps/ok"},
